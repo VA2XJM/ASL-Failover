@@ -52,7 +52,8 @@ fi
 ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
 echo "-> Connected to : $ALINKS"
 
-if grep -q $NODE_PRIM <<<"$ALINKS"; then
+NODE_PRIM_G=$NODE_PRIM"T"
+if grep -q $NODE_PRIM_G <<<"$ALINKS"; then
         if ping -c 1 $NODE_PRIM_H &> /dev/null; then
                 echo "--> Connected to PRIMARY node."
                 echo "-> DONE."
@@ -83,7 +84,8 @@ if grep -q $NODE_PRIM <<<"$ALINKS"; then
         fi
 fi
 
-if grep -q $NODE_SEC <<<"$ALINKS"; then
+NODE_SEC_G=$NODE_SEC"T"
+if grep -q $NODE_SEC_G <<<"$ALINKS"; then
         echo "-> Connected to SECONDARY node. Trying to reconnect to PRIMARY."
         if ping -c1 $NODE_PRIM_H &>/dev/null; then
                 echo "--> PRIMARY node responding to ping. Reconnecting..."
