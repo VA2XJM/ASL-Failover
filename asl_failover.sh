@@ -82,6 +82,14 @@ if grep -q $NODE_PRIM_G <<<"$ALINKS"; then
                         fi
                 fi
         fi
+else
+	NODE_PRIM_G=$NODE_PRIM"C"
+	if grep -q $NODE_PRIM_G <<<"$ALINKS"; then
+		echo "--> Not connected to PRIMARY node. Trying to connect to SECONDARY node..."
+		asterisk -rx "rpt cmd $NODE ilink 11 $NODE_PRIM"
+		asterisk -rx "rpt cmd $NODE ilink 13 $NODE_SEC"
+		ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
+	fi
 fi
 
 NODE_SEC_G=$NODE_SEC"T"
@@ -106,6 +114,9 @@ if grep -q $NODE_SEC_G <<<"$ALINKS"; then
                 echo "-> PRIMARY is not responding to PING. Stay on SECONDARY."
                 exit
         fi
+else
+	echo "--> Not connected to PRIMARY or SECONDARY."
+	exit
 fi
 
 # IF not ALINKS
