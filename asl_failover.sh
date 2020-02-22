@@ -114,9 +114,6 @@ if grep -q $NODE_SEC_G <<<"$ALINKS"; then
                 echo "-> PRIMARY is not responding to PING. Stay on SECONDARY."
                 exit
         fi
-else
-	echo "--> Not connected to PRIMARY or SECONDARY."
-	exit
 fi
 
 # IF not ALINKS
