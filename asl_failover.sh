@@ -23,6 +23,9 @@
 #### Settings
 ###
 
+# Status File (0=Disconnected, 1=Primary, 2=Failover)
+STATUS_FILE="/tmp/asl_failover.status"
+
 # Local node
 NODE="1999"
 
@@ -43,86 +46,132 @@ NODE_SEC_H=$NODE_SEC".nodes.allstarlink.org"
 ###
 if ! ping -c1 google.com &>/dev/null; then
         echo "-> Internet not available."
+	echo "0" > $STATUS_FILE
         exit
 fi
 
 ###
 #### Retrieve actual connected node
 ###
-ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
-echo "-> Connected to : $ALINKS"
 
-NODE_PRIM_G=$NODE_PRIM"T"
-if grep -q $NODE_PRIM_G <<<"$ALINKS"; then
-        if ping -c 1 $NODE_PRIM_H &> /dev/null; then
-                echo "--> Connected to PRIMARY node."
-                echo "-> DONE."
-                exit
+ACTION="GO"
+STATUS="0"
+NODE_PRIM_T=$NODE_PRIM"T"
+NODE_SEC_T=$NODE_SEC"T"
+NODE_PRIM_C=$NODE_PRIM"C"
+NODE_SEC_C=$NODE_SEC"C"
 
-        else
-                echo "--> PRIMARY node not responsding PING."
-                if grep -q $NODE_SEC <<<"$ALINKS"; then
-                         echo "--> Connected to SECONDARY node. Failover mode."
-                else
-                        echo "--> Connecting to SECONDARY node..."
-                        if ping -c1 $NODE_SEC_H &>/dev/null; then
-                                asterisk -rx "rpt cmd $NODE ilink 11 $NODE_PRIM"
-                                asterisk -rx "rpt cmd $NODE ilink 13 $NODE_SEC"
-                                ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
-                                if grep -q $NODE_SEC <<<"$ALINKS"; then
-                                        echo "--> Connected to SECONDARY node. Failover mode."
-                                        exit
-                                else
-                                        echo "--> Connection to SECONDARY failed."
-                                        exit
-                                fi
-                        else
-                                echo "--> SECONDARY is not responding to PING."
-                                exit
-                        fi
-                fi
-        fi
+#-> Validate Status
+##-> Primary
+LINK_P=`asterisk -rx "rpt lstats $NODE" | grep $NODE_PRIM`
+if grep -q "ESTABLISHED" <<<"$LINK_P"; then
+	echo "-> Connected to PRIMARY"
+	STATUS="1"
+	ACTION="EXIT"
+
+elif grep -q "CONNECTING" <<<"$LINK_P"; then
+	echo "-> Connecting to PRIMARY..."
+	sleep 5
+	LINK_P=`asterisk -rx "rpt lstats $NODE" | grep $NODE_PRIM`
+	if grep -q "ESTABLISHED" <<<"$LINK_P"; then
+		echo "-> Connected to primary"
+		STATUS="1"
+		ACTION="EXIT"
+	else
+		echo "-> Connection to PRIMARY not established. Going to FAILOVER"
+		STATUS="0"
+		ACTION="FAILOVER"
+	fi
+
 else
-	NODE_PRIM_G=$NODE_PRIM"C"
-	if grep -q $NODE_PRIM_G <<<"$ALINKS"; then
-		echo "--> Not connected to PRIMARY node. Trying to connect to SECONDARY node..."
-		asterisk -rx "rpt cmd $NODE ilink 11 $NODE_PRIM"
-		asterisk -rx "rpt cmd $NODE ilink 13 $NODE_SEC"
-		ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
+	echo "-> Not connected to PRIMARY."
+fi
+
+##-> Secondary
+LINK_S=`asterisk -rx "rpt lstats $NODE" | grep $NODE_SEC`
+if grep -q "ESTABLISHED" <<<"$LINK_S"; then
+	echo "-> Connected to SECONDARY"
+	STATUS="2"
+	ACTION="CHECK"
+
+elif grep -q "CONNECTING" <<<"$LINK_S"; then
+	echo "-> Connecting to SECONDARY..."
+	sleep 5
+	LINK_S=`asterisk -rx "rpt lstats $NODE" | grep $NODE_SEC`
+	if grep -q "ESTABLISHED" <<<"$LINK_S"; then
+		echo "-> Connected to SECONDARY"
+		STATUS="2"
+		ACTION="EXIT"
+	else
+		echo "-> Connection to SECONDARY not established. FAILOVER failed."
+		STATUS="0"
+		ACTION="FAILED"
+	fi
+
+else
+	echo "-> Not connected to SECONDARY."
+fi
+
+#-> Taking Actions
+##-> Return to PRIMARY
+if [ "$ACTION" == "CHECK" ]; then
+	echo "--> Trying to reconnect to PRIMARY."
+	asterisk -rx "rpt cmd $NODE ilink 3 $NODE_PRIM"
+	sleep 5
+	LINKS=`asterisk -rx "rpt lstats $NODE" | grep $NODE_PRIM`
+	if grep -q "ESTABLISHED" <<<"$LINKS"; then
+		echo "--> Connected to PRIMARY"
+		asterisk -rx "rpt cmd $NODE ilink 1 $NODE_SEC"
+		STATUS="1"
+		ACTION="EXIT"
+	else
+		echo "--> Cannot connect to PRIMARY. Remain in failover mode."
+		asterisk -rx "rpt cmd $NODE ilink 1 $NODE_PRIM"
+		STATUS="2"
+		ACTION="EXIT"
 	fi
 fi
 
-NODE_SEC_G=$NODE_SEC"T"
-if grep -q $NODE_SEC_G <<<"$ALINKS"; then
-        echo "-> Connected to SECONDARY node. Trying to reconnect to PRIMARY."
-        if ping -c1 $NODE_PRIM_H &>/dev/null; then
-                echo "--> PRIMARY node responding to ping. Reconnecting..."
-                asterisk -rx "rpt cmd $NODE ilink 11 $NODE_SEC"
-                asterisk -rx "rpt cmd $NODE ilink 13 $NODE_PRIM"
-                ALINKS=`asterisk -rx "rpt xnode $NODE" | grep RPT_ALINKS= | rev | cut -d "=" -f1 | rev`
-
-                if grep -q $NODE_PRIM <<<"$ALINKS"; then
-                        echo "--> Reconnected to PRIMARY!"
-                        echo "-> DONE."
-                        exit
-                else
-                        asterisk -rx "rpt cmd $NODE ilink 13 $NODE_SEC"
-                        echo "--> Reconnection to PRIMARY failed. Failover to SECONDARY."
-                        exit
-                fi
-        else
-                echo "-> PRIMARY is not responding to PING. Stay on SECONDARY."
-                exit
-        fi
+##-> Go to SECONDARY
+if [ "$ACTION" == "FAILOVER" ]; then
+	echo "--> Connecting to SECONDARY"
+	asterisk -rx "rpt cmd $NODE ilink 3 $NODE_SEC"
+	sleep 5
+	LINKS=`asterisk -rx "rpt lstats $NODE" | grep $NODE_SEC`
+	if grep -q "ESTABLISHED" <<<"$LINKS"; then
+		echo "--> Connected to SECONDARY"
+		asterisk -rx "rpt cmd $NODE ilink 1 $NODE_PRIM"
+		STATUS="2"
+		ACTION="EXIT"
+	else
+		echo "--> Cannot connect to SECONDARY."
+		asterisk -rx "rpt cmd $NODE ilink 1 $NODE_SEC"
+		STATUS="0"
+		ACTION="EXIT"
+	fi
 fi
 
-# IF not ALINKS
-if [ "$ALINKS" == 0 ]; then
-        echo "-> Not linked. Trying unsupervised reconnection..."
-        asterisk -rx "rpt cmd $NODE ilink 13 $NODE_PRIM"
-        asterisk -rx "rpt cmd $NODE ilink 13 $NODE_SEC"
-        echo "-> Stand by for next check for connection confirmation."
-        exit
+##-> Return to PRIMARY
+if [ "$ACTION" == "FAILED" ]; then
+	asterisk -rx "rpt cmd $NODE ilink 3 $NODE_PRIM"
+	asterisk -rx "rpt cmd $NODE ilink 1 $NODE_SEC"
+	echo "--> Failover failed. Return to PRIMARY."
+	ACTION="EXIT"
+fi
+
+##-> Ensure no loop are operated
+if [ ! "$LINK_P" == "" ] && [ ! "$LINK_S" == "" ]; then
+	asterisk -rx "rpt cmd $NODE ilink 1 $NODE_SEC"
+	STATUS="1"
+fi
+
+##-> Write status to file.
+echo $STATUS > $STATUS_FILE
+
+##-> EXIT
+if [ "$ACTION" == "EXIT" ]; then
+	echo "DONE."
+	exit
 fi
 
 echo "-end"
